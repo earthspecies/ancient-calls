@@ -1,0 +1,24 @@
+# Example pipeline config. Point the input paths at a dataset that conforms to
+# docs/data-format.md, then: commoncalls-run --config configs/example.yaml
+#
+# Drop a dataset into data/example/ (see data/example/README.md) to use this.
+
+embeddings_path: data/example/embeddings.npy
+metadata_path: data/example/metadata.csv
+tree_path: data/example/tree.nwk
+
+# Provide ONE of these:
+link_function_path: data/example/match_function.json
+# labeled_pairs_path: data/example/labeled_pairs.csv
+# link_function: histogram
+
+work_dir: work
+n_reference_calls: 100
+random_seed: 42
+
+reconstruction_modes:
+  - mode: binary
+    leaf_threshold: 0.6
+    ancestor_threshold: 0.6
+  - mode: continuous
+    ancestor_threshold: 0.6
