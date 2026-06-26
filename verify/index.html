@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Ancient Calls — Overview</title>
+<style>
+  body { margin: 0; font: 14px/1.45 system-ui, sans-serif; color: #222; background: #fafafa; }
+  header { padding: 10px 16px; background: #fff; border-bottom: 1px solid #ddd; display: flex; gap: 16px; align-items: center; }
+  header h1 { font-size: 16px; margin: 0; font-weight: 600; }
+  main { padding: 16px 20px; }
+  a { color: #2a6; }
+  label { color: #555; }
+  table { border-collapse: collapse; width: 100%; background: #fff; }
+  th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid #eee; }
+  th { cursor: pointer; user-select: none; background: #f4f4f4; position: sticky; top: 0; }
+  tr:hover { background: #f3f8f3; }
+  .muted { color: #888; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Ancient Calls — Overview</h1>
+  <a href="verify.html">verify →</a>
+  <label style="margin-left:auto">mode <select id="modeSel"></select></label>
+</header>
+<main>
+  <p class="muted" id="summary"></p>
+  <table id="tbl"><thead><tr>
+    <th data-k="call_key">call</th>
+    <th data-k="reference_species">species</th>
+    <th data-k="age">oldest ancestral age (Myr)</th>
+  </tr></thead><tbody></tbody></table>
+</main>
+<script>
+let DATA = null, MODE = null, SORT = { k: "age", dir: -1 };
+
+function render() {
+  const rows = DATA.calls.map(c => ({ ...c, age: c.ages[MODE] }));
+  rows.sort((a, b) => {
+    let x = a[SORT.k], y = b[SORT.k];
+    if (x == null) x = -Infinity; if (y == null) y = -Infinity;
+    return (x < y ? -1 : x > y ? 1 : 0) * SORT.dir;
+  });
+  const withAge = rows.filter(r => r.age != null).length;
+  document.getElementById("summary").textContent =
+    `${rows.length} reference calls · ${withAge} with an inferred ancestral age · experiment "${DATA.experiment}"`;
+  document.querySelector("#tbl tbody").innerHTML = rows.map(r =>
+    `<tr><td><a href="verify.html">${r.call_key}</a></td>
+     <td>${r.reference_species}</td>
+     <td>${r.age == null ? "—" : r.age.toFixed(1)}</td></tr>`).join("");
+}
+
+fetch("data.json").then(r => r.json()).then(d => {
+  DATA = d; MODE = d.mode_names[0];
+  const sel = document.getElementById("modeSel");
+  sel.innerHTML = d.mode_names.map((n, i) => `<option value="${n}">${d.modes[i]}</option>`).join("");
+  sel.onchange = () => { MODE = sel.value; render(); };
+  document.querySelectorAll("th").forEach(th => th.onclick = () => {
+    const k = th.dataset.k;
+    SORT = { k, dir: SORT.k === k ? -SORT.dir : 1 };
+    render();
+  });
+  render();
+});
+</script>
+</body>
+</html>

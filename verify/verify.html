@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Ancient Calls — Verify</title>
+<style>
+  :root { --green: #40b340; --grey: #e0e0e0; --bg: #fafafa; --line: #ddd; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 14px/1.45 system-ui, sans-serif; color: #222; background: var(--bg); }
+  header { padding: 10px 16px; background: #fff; border-bottom: 1px solid var(--line); display: flex; gap: 16px; align-items: center; }
+  header h1 { font-size: 16px; margin: 0; font-weight: 600; }
+  header .sp { flex: 1; }
+  a { color: #2a6; }
+  #layout { display: grid; grid-template-columns: 300px 1fr; height: calc(100vh - 49px); }
+  #sidebar { border-right: 1px solid var(--line); overflow-y: auto; background: #fff; }
+  #sidebar input { width: 100%; padding: 8px 10px; border: 0; border-bottom: 1px solid var(--line); }
+  .call-item { padding: 8px 12px; border-bottom: 1px solid #f0f0f0; cursor: pointer; }
+  .call-item:hover { background: #f3f8f3; }
+  .call-item.active { background: #e8f5e8; }
+  .call-item .species { font-weight: 600; }
+  .call-item .meta { color: #888; font-size: 12px; }
+  #main { overflow-y: auto; padding: 16px 20px; }
+  .muted { color: #888; }
+  .row { display: flex; gap: 20px; align-items: flex-start; }
+  svg text { font: 9px sans-serif; }
+  .species-row { border-bottom: 1px solid #eee; padding: 8px 0; }
+  .species-row .head { display: flex; align-items: center; gap: 10px; }
+  .bar { height: 10px; background: var(--grey); border-radius: 5px; flex: 0 0 120px; overflow: hidden; }
+  .bar > div { height: 100%; background: var(--green); }
+  .clips { margin: 6px 0 0 18px; display: flex; flex-wrap: wrap; gap: 8px; }
+  .clip { font-size: 12px; color: #555; border: 1px solid var(--line); border-radius: 6px; padding: 4px 6px; background: #fff; }
+  audio { height: 28px; vertical-align: middle; }
+  button.vbtn { border: 1px solid var(--line); background: #fff; border-radius: 6px; padding: 3px 9px; cursor: pointer; }
+  button.vbtn.match { background: #d8f0d8; border-color: var(--green); }
+  button.vbtn.no_match { background: #f6d8d8; border-color: #d66; }
+  button.vbtn.unsure { background: #f3eecb; border-color: #cb6; }
+  select, .pill { padding: 4px 8px; border: 1px solid var(--line); border-radius: 6px; background: #fff; }
+  #exportBtn { background: var(--green); color: #fff; border: 0; padding: 7px 14px; border-radius: 7px; cursor: pointer; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Ancient Calls — Verify</h1>
+  <a href="index.html">overview</a>
+  <span class="sp"></span>
+  <label>verifier <input id="verifier" placeholder="your name" class="pill" /></label>
+  <label>mode <select id="modeSel"></select></label>
+  <button id="exportBtn">Export verifications</button>
+</header>
+<div id="layout">
+  <div id="sidebar">
+    <input id="filter" placeholder="filter by species…" />
+    <div id="callList"></div>
+  </div>
+  <div id="main"><p class="muted">Loading…</p></div>
+</div>
+
+<script>
+let DATA = null, CALL = null, MODE = null;
+const V = {}; // verifications[call_key][species] = {status, probability, displayed_example_ids, top_example_id}
+
+const colorScale = p => {
+  if (p == null) return "#e0e0e0";
+  const g = Math.round(255 - (255 - 0xb3) * p), r = Math.round(255 - (255 - 0x40) * p), b = r;
+  return `rgb(${r},${g},${b})`;
+};
+
+// ---- Newick parser (small client-side trees) ----
+function parseNewick(s) {
+  let i = 0;
+  function node() {
+    const n = { children: [], name: "", length: 0 };
+    if (s[i] === "(") {
+      i++;
+      do { n.children.push(node()); } while (s[i++] === ",");
+    }
+    let name = "";
+    while (i < s.length && "():,;".indexOf(s[i]) < 0) name += s[i++];
+    n.name = name;
+    if (s[i] === ":") { i++; let v = ""; while (i < s.length && "():,;".indexOf(s[i]) < 0) v += s[i++]; n.length = parseFloat(v); }
+    return n;
+  }
+  return node();
+}
+
+function layout(root) {
+  const leaves = [];
+  (function collect(n) { if (!n.children.length) leaves.push(n); else n.children.forEach(collect); })(root);
+  leaves.forEach((lf, idx) => (lf.y = idx));
+  (function setX(n, x) { n.x = x + (n.length || 0); n.children.forEach(c => setX(c, n.x)); })(root, 0);
+  (function setY(n) { if (n.children.length) { n.children.forEach(setY); n.y = n.children.reduce((s, c) => s + c.y, 0) / n.children.length; } })(root);
+  let maxX = 0; (function mx(n){ maxX = Math.max(maxX, n.x); n.children.forEach(mx); })(root);
+  return { leaves, maxX };
+}
+
+function drawTree(container, probBySpecies, nodeVals) {
+  const root = parseNewick(DATA.tree_newick);
+  const { leaves, maxX } = layout(root);
+  const rowH = 13, padL = 8, padR = 220, W = 520, H = leaves.length * rowH + 20;
+  const sx = (W - padL - padR) / (maxX || 1);
+  const X = n => padL + n.x * sx, Y = n => 10 + n.y * rowH;
+  const parts = [`<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">`];
+  (function edges(n) {
+    n.children.forEach(c => {
+      parts.push(`<path d="M${X(n)} ${Y(c)} H${X(c)}" stroke="#666" fill="none" stroke-width="1"/>`);
+      edges(c);
+    });
+    if (n.children.length) {
+      const ys = n.children.map(Y);
+      parts.push(`<path d="M${X(n)} ${Math.min(...ys)} V${Math.max(...ys)}" stroke="#666" fill="none" stroke-width="1"/>`);
+    }
+  })(root);
+  (function nodes(n) {
+    if (n.children.length) {
+      const v = nodeVals[n.name];
+      if (v != null) parts.push(`<circle cx="${X(n)}" cy="${Y(n)}" r="3" fill="${colorScale(v)}" stroke="#999" stroke-width="0.5"/>`);
+    } else {
+      const p = probBySpecies[n.name];
+      parts.push(`<rect x="${X(n)}" y="${Y(n) - 4}" width="8" height="8" fill="${colorScale(p)}" stroke="#bbb" stroke-width="0.5"/>`);
+      parts.push(`<text x="${X(n) + 11}" y="${Y(n) + 3}">${n.name}</text>`);
+    }
+    n.children.forEach(nodes);
+  })(root);
+  parts.push("</svg>");
+  container.innerHTML = parts.join("");
+}
+
+// ---- rendering ----
+function renderCallList() {
+  const q = document.getElementById("filter").value.toLowerCase();
+  const html = DATA.calls
+    .filter(c => c.reference_species.toLowerCase().includes(q))
+    .map(c => {
+      const age = c.ages[MODE];
+      const a = age == null ? "—" : age.toFixed(1) + " Myr";
+      const active = CALL && CALL.call_key === c.call_key ? " active" : "";
+      return `<div class="call-item${active}" data-key="${c.call_key}">
+        <div class="species">${c.reference_species}</div>
+        <div class="meta">${c.call_key} · oldest ${a}</div></div>`;
+    }).join("");
+  document.getElementById("callList").innerHTML = html;
+  document.querySelectorAll(".call-item").forEach(el =>
+    el.onclick = () => loadCall(el.dataset.key));
+}
+
+function audioEl(ref) { return ref ? `<audio controls preload="none" src="${ref}"></audio>` : `<span class="muted">no audio</span>`; }
+
+function renderCall() {
+  const c = CALL;
+  const probBySpecies = {};
+  c.species.forEach(s => (probBySpecies[s.species] = s.probability));
+  const mode = c.modes.find(m => m.name === MODE) || c.modes[0];
+  const nodeVals = mode ? mode.node_vals : {};
+  const age = mode && mode.age != null ? mode.age.toFixed(2) + " Myr" : "none";
+
+  // All species with non-zero probability, sorted (by the builder) descending.
+  // No silent cap: the full list is shown and counted below.
+  const present = c.species.filter(s => s.probability > 0);
+  const main = document.getElementById("main");
+  main.innerHTML = `
+    <h2 style="margin:0 0 2px">${c.reference_species} <span class="muted" style="font-weight:400">${c.call_key}</span></h2>
+    <div class="muted" style="margin-bottom:8px">${c.reference_example_id}</div>
+    <div class="row">
+      <div>
+        <div style="margin-bottom:6px"><b>Reference call</b> ${audioEl(c.reference_audio)}</div>
+        <div><b>Oldest ancestral node with call (${mode ? mode.label : "—"}):</b> ${age}</div>
+        <div id="tree" style="margin-top:8px;border:1px solid var(--line);background:#fff;border-radius:8px;padding:6px;overflow:auto;max-height:70vh"></div>
+      </div>
+      <div style="flex:1">
+        <b>Species by call probability</b> <span class="muted">(${present.length} with p &gt; 0; species at p = 0 omitted)</span>
+        <div id="speciesList"></div>
+      </div>
+    </div>`;
+  drawTree(document.getElementById("tree"), probBySpecies, nodeVals);
+
+  const sl = document.getElementById("speciesList");
+  sl.innerHTML = present.map(s => {
+    const vstate = (V[c.call_key] && V[c.call_key][s.species] && V[c.call_key][s.species].status) || "";
+    const clips = s.clips.map(cl =>
+      `<span class="clip">${cl.similarity.toFixed(2)} ${audioEl(cl.audio)}</span>`).join("");
+    const btn = (st, lbl) => `<button class="vbtn ${vstate === st ? st : ""}" data-sp="${s.species}" data-st="${st}">${lbl}</button>`;
+    return `<div class="species-row">
+      <div class="head">
+        <span style="flex:0 0 200px">${s.species}</span>
+        <div class="bar"><div style="width:${Math.round(s.probability * 100)}%"></div></div>
+        <span class="muted">${s.probability.toFixed(2)}</span>
+        ${btn("match", "match")} ${btn("no_match", "no")} ${btn("unsure", "?")}
+      </div>
+      <div class="clips">${clips || '<span class="muted">no clips</span>'}</div>
+    </div>`;
+  }).join("");
+
+  sl.querySelectorAll("button.vbtn").forEach(b => b.onclick = () => {
+    const sp = b.dataset.sp, st = b.dataset.st;
+    const srow = c.species.find(x => x.species === sp);
+    V[c.call_key] = V[c.call_key] || {};
+    V[c.call_key][sp] = {
+      status: st,
+      original_probability: srow.probability,
+      displayed_example_ids: srow.clips.map(x => x.example_id),
+      top_example_id: srow.clips.length ? srow.clips[0].example_id : null,
+    };
+    persist();
+    renderCall();
+  });
+}
+
+function loadCall(key) {
+  fetch(`calls/${key}.json`).then(r => r.json()).then(c => { CALL = c; renderCallList(); renderCall(); });
+}
+
+function persist() { localStorage.setItem("cc_verifications", JSON.stringify(V)); }
+function restore() { try { Object.assign(V, JSON.parse(localStorage.getItem("cc_verifications") || "{}")); } catch (e) {} }
+
+function exportVerifications() {
+  const verifications = {};
+  for (const ck of Object.keys(V)) {
+    const callMeta = DATA.calls.find(c => c.call_key === ck);
+    verifications[ck] = {
+      reference_example_id: callMeta ? callMeta.reference_example_id : null,
+      species: V[ck],
+    };
+  }
+  const out = {
+    verifier: document.getElementById("verifier").value || "anonymous",
+    timestamp: new Date().toISOString(),
+    experiment: DATA.experiment,
+    run: "ancientcalls",
+    mode: MODE,
+    verifications,
+  };
+  const blob = new Blob([JSON.stringify(out, null, 2)], { type: "application/json" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `verifications_${out.verifier}_${out.timestamp.slice(0, 10)}.json`;
+  a.click();
+}
+
+fetch("data.json").then(r => r.json()).then(d => {
+  DATA = d;
+  MODE = d.mode_names[0];
+  restore();
+  const sel = document.getElementById("modeSel");
+  sel.innerHTML = d.mode_names.map((n, i) => `<option value="${n}">${d.modes[i]}</option>`).join("");
+  sel.onchange = () => { MODE = sel.value; renderCallList(); if (CALL) renderCall(); };
+  document.getElementById("filter").oninput = renderCallList;
+  document.getElementById("exportBtn").onclick = exportVerifications;
+  renderCallList();
+  document.getElementById("main").innerHTML = '<p class="muted">Select a reference call on the left.</p>';
+});
+</script>
+</body>
+</html>

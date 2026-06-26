@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.ruff_cache/
+.pytest_cache/
+
+# Pipeline working/output directories
+work/
+results/
+*.npy
+!tests/**/*.npy
+
+# Generated example fixture (regenerate: python scripts/make_example_fixture.py)
+/data/example/*
+!/data/example/README.md
+
+# OS
+.DS_Store
